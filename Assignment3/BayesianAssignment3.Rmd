@@ -1,0 +1,459 @@
+---
+title: "BayesAnalysisAssignment3"
+author: "Gavin Connolly"
+date: "11/04/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("C:/Users/Gavin/Documents/Bayesian Analysis")
+
+library(tidyr) 
+library(rstan) 
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+library(ggplot2)
+library(bayesplot)
+theme_set(bayesplot::theme_default(base_family = "sans"))
+library(shinystan)
+source('stan_utility.R')
+library(GGally)
+library(gridExtra)
+library(loo)
+```
+
+## Importation of Data
+
+Import data relating to recorded ozone levels based, with respect to levels of solar radiation, maximum daily temperature in Farenheit & wind speeds measured in mph.
+Create a pairs plots to examine the correlations between each of the variables.
+
+For each of the 4 models I have chosen a normal prior centred on 0 with a standard deviation of 50 for the $\beta_1$ intercept-parameter, and then a normal prior centred on 0 with a standard deviation of 10 for each of the $β_2$, $β_3$ & $β_4$ parameters.
+These relatively vague priors should allow plenty of flexibility in our model fit, which is necessary in this case as we do not have much external information on the relationships between each of the variables. 
+Centring each parameter on 0 assumes no relation between the target variable of the mean ozone level and each of the predictor variables.
+
+We set the $\sigma$ parameter to be a positive-valued real number, but other than this set no restrictions on the values it can take, as we have no real prior information on the distribution of $\sigma$, & thus want to provide as much flexibility in the values it takes as possible.
+
+```{r Importation of Data}
+SEED <- 151515 # set random seed for reproducability
+
+data <- read.csv("ozone.csv")
+str(data)
+data <- data[,-1] # Remove X variable which is just an index of observation numbers
+
+ggpairs(data) # look at plot of the data to check for patterns
+
+```
+
+$M_1 : ozone_i \sim N(\beta 1 + \beta_2 \cdot solar_i, \sigma^2)$
+
+$M_2 : ozone_i \sim N(\beta 1 + \beta_2 \cdot solar_i +\beta_3 \cdot wind_i, \sigma^2)$
+
+$M_3 : ozone_i \sim N(\beta 1 + \beta_2 \cdot solar_i +\beta_3 \cdot wind_i +\beta_4 \cdot temp_i, \sigma^2)$
+
+## Question 1
+Implement a Bayesian analysis for the three models listed above.
+Provide a careful and concise explanation of the choice of priors for each parameter.
+Provide appropriate plots to present the data and
+the results of the Bayesian analysis. For each model, interpret the output from the Bayesian analysis.
+
+## Linear Regression model based on Solar Radiation levels
+
+```{r Write stan model for single predictor model}
+N = nrow(data)
+dat1 <- list(N = NROW(data),  K =2, 
+             X = cbind(rep(1,N), data$solar), ozone = data$Y)
+writeLines(readLines("Ozone.stan"))
+```
+
+Here we fit the model outlined above.
+
+```{r first model output}
+fit_1 <- stan(file="Ozone.stan", data=dat1, iter=10000)
+print(fit_1, pars=c("beta", "sigma"), probs = c(0.05, 0.5, 0.95)) # rhat = 1 for each variable, chain converged
+
+post1 <- as.data.frame(fit_1)
+cor(cbind(post1$`beta[1]`,post1$`beta[2]`))
+stan_plot(fit_1, pars = c("beta"))
+```
+
+We observe that both of the coefficients are significantly different from 0, indicating that there is a statistically significant relationship between the predictor variable & the level of solar radiation. The $β_1$ coefficient roughly corresponds to the mean ozone level of the data, while the positive $β_2$ coefficient indicates that ozone levels increase by 10.49 parts per billion for each increase of one unit of solar radiation.
+
+We plot our regression with a corresponding 90% highest density credible interval for our regression mean, as well as the 90% credible interval for our prediction.
+
+```{r Plot our fitted regression model M1}
+f_mu2 <- function(x) post1$`beta[1]` + post1$`beta[2]` * x
+solar_new <- seq(-2, 2, 0.01) # plot showed data lying on interval (0,300)
+mu2 <- sapply(solar_new, f_mu2)
+
+# calculate 90% credible interval for regression mean
+y_hdi = HDInterval::hdi(mu2, credMass=0.9)
+hpdi_l = y_hdi[1,]
+hpdi_u = y_hdi[2,]
+
+p <- ggplot() 
+# store plot of regression line as well as 90% credible interval for regression mean
+p2 <- p +
+  geom_point(data = as.data.frame(dat1),
+             aes(dat1$X[,2], dat1$ozone), shape = 1, color = 'dodgerblue') +
+  geom_ribbon(aes(solar_new, ymin = hpdi_l, ymax = hpdi_u),
+              alpha = .1) +
+  geom_abline(data = post1,
+              aes(intercept = mean(`beta[1]`), slope = mean(`beta[2]`))) +
+  labs(subtitle="HPDI Interval = 0.9") + xlab("Solar")+ylab("Ozone")
+
+y_pi <- sapply(solar_new,
+               function(x) rnorm(NROW(post1), post1$`beta[1]` + post1$`beta[2]` * x, post1$sigma)
+)
+
+# calculate 90% credible intervals for prediction intervals
+y_phdi = HDInterval::hdi(y_pi, credMass=0.9)
+pi_l = y_phdi[1,]
+pi_u = y_phdi[2,]
+
+# plot prediction intervals along with regression line & credible interval for linear mean
+p2 + geom_ribbon(mapping = aes(solar_new, ymin=pi_l, ymax=pi_u), alpha = 0.05) +
+  labs(subtitle = 'Prediction Intervals = 0.9')
+# We see from the graph that the model seems to do a decent job at predicting low solar value observations
+# But seems to perform poorly in predicting the higher valued solar observations, perhaps indicating a non-linear relationship between the 2 variables
+
+```
+
+The above plot shows the regression line of the fitted model along with a 90% credible interval for the posterior mean of $β_2$ as well as a 90% posterior prediction interval for the mean ozone levels. We see from the plot that the model seems to predict the ozone levels somewhat well for low levels of solar radiation with the model perhaps overestimating the true ozone levels slightly, but the linear relationship between the two variables completely breaks down for observations with high levels of solar radiation, with a large proportion of observations lying outside our prediction interval. The variance in the levels of ozone for these high solar radiation observations appears much greater than that of the lower valued observations. Overall, I do not feel that a linear relationship between the variables accurately represents the distribution of observations.
+
+## Linear Regression Model based on solar radiation as well as wind speeds
+
+```{r Fit our second model}
+
+dat2 <- list(N = NROW(data), K =3, X = cbind(rep(1,N), data$solar, data$wind), ozone = data$Y)
+fit_2 <- stan(file="Ozone.stan", data=dat2, iter=10000)
+print(fit_2, pars=c("beta", "sigma"), probs = c(0.05, 0.5, 0.95)) # rhat = 1 for each variable, chain converged
+
+post2 <- as.data.frame(fit_2)
+cor(cbind(post2$`beta[1]`,post2$`beta[2]`, post2$`beta[3]`))
+stan_plot(fit_2, pars = c("beta"))
+```
+
+Once again, we observe that each variable included in the model is significantly different from zero. The interpretation of the $β_1$ & $β_2$ parameters are similar to those in the 1st model, with the $β_3$ parameter of -18.06 indicating that ozone levels decrease by 18.06 parts per billion for every 1 mph increase in wind speed.
+
+```{r Plot regression model for each of the 2 variables in our model}
+f_mu2_solar <- function(x) post2$`beta[1]` + post2$`beta[2]` * x + post2$`beta[3]` * mean(data$wind)
+mu2_solar <- sapply(solar_new,f_mu2_solar)
+# calculate 90% credible interval for regression mean
+y_hdi_solar = HDInterval::hdi(mu2_solar, credMass=0.9)
+hpdi_l_solar = y_hdi_solar[1,]
+hpdi_u_solar = y_hdi_solar[2,]
+
+# store plot of regression line as well as 90% credible interval for regression mean
+p2 <- p +
+  geom_point(data = as.data.frame(dat2),
+             aes(dat2$X[,2], dat2$ozone), shape = 1, color = 'dodgerblue') +
+  geom_ribbon(aes(solar_new, ymin = hpdi_l_solar, ymax = hpdi_u_solar),
+              alpha = .1) +
+  geom_abline(data = post2,
+              aes(intercept = mean(`beta[1]`), slope = mean(`beta[2]`))) +
+  labs(subtitle="HPDI Interval = 0.9") +  xlab("solar") + ylab("Ozone")
+
+y_pi_solar <- sapply( solar_new,
+                      function(x) rnorm(NROW(post2), post2$`beta[1]` + post2$`beta[2]` * x + post2$`beta[3]`*mean(data$wind), post2$sigma)
+)
+
+# calculate 90% credible intervals for prediction intervals
+y_phdi_solar = HDInterval::hdi(y_pi_solar, credMass=0.9)
+pi_l_solar = y_phdi_solar[1,]
+pi_u_solar = y_phdi_solar[2,]
+
+# plot prediction intervals along with regression line & credible interval for linear mean
+p2_solar <- p2 + geom_ribbon(mapping = aes(solar_new, ymin=pi_l_solar, ymax=pi_u_solar), alpha = 0.05) +
+  labs(subtitle = 'Prediction Intervals = 0.9')
+
+f_mu2_wind <- function(x) post2$`beta[1]` + post2$`beta[2]`*mean(data$solar) + post2$`beta[3]` * x
+wind_new <- seq(-2.2, 3.1, 0.01)
+mu2_wind <- sapply(wind_new,f_mu2_wind)
+# calculate 90% credible interval for regression mean
+y_hdi_wind = HDInterval::hdi(mu2_wind, credMass=0.9)
+hpdi_l_wind = y_hdi_wind[1,]
+hpdi_u_wind = y_hdi_wind[2,]
+
+y_pi_wind <- sapply( wind_new,
+                     function(x) rnorm(NROW(post2), post2$`beta[1]` + post2$`beta[2]`*mean(data$wind) + post2$`beta[3]` * x, post2$sigma)
+)
+
+# calculate 90% credible intervals for prediction intervals
+y_phdi_wind = HDInterval::hdi(y_pi_wind, credMass=0.9)
+pi_l_wind = y_phdi_wind[1,]
+pi_u_wind = y_phdi_wind[2,]
+
+# store plot of regression line as well as 90% credible interval for regression mean
+p2 <- p +
+  geom_point(data = as.data.frame(dat2),
+             aes(dat2$X[,3], dat2$ozone), shape = 1, color = 'dodgerblue') +
+  geom_ribbon(aes(wind_new, ymin = hpdi_l_wind, ymax = hpdi_u_wind),
+              alpha = .1) +
+  geom_abline(data = post2,
+              aes(intercept = mean(`beta[1]`), slope = mean(`beta[3]`))) +
+  labs(subtitle="HPDI Interval = 0.9") +  xlab("wind") + ylab("Ozone")
+
+# plot prediction intervals along with regression line & credible interval for linear mean
+p2_wind <- p2 + geom_ribbon(mapping = aes(wind_new, ymin=pi_l_wind, ymax=pi_u_wind), alpha = 0.05) +
+  labs(subtitle = 'Prediction Intervals = 0.9')
+
+p2_solar
+p2_wind
+```
+
+In the above figure, I have plotted the ozone levels against each of the predictor variables, including a 90% credible interval for the posterior mean line & a 90% prediction interval for the ozone level within each, assuming each of the other predictor variables in the model takes it’s mean value. 
+This method of visualising the model is not ideal due to the above assumption but is shown anyways due to issues with plotting multidimensional models.
+Other than the apparent non-linearity for high solar valued observations mentioned in our analysis of model 1, the regression lines seem to match the observed data relatively well for each variable.
+
+## Linear Regression Model based on solar radiation, wind speeds as well as max daily temperatures
+
+```{r Fit third model}
+dat3 <- list(N = NROW(data), K=4, X = cbind(rep(1,N), data$solar, data$wind, data$temp), ozone = data$Y)
+fit_3 <- stan(file="Ozone.stan", data=dat3, iter=10000)
+print(fit_3, pars=c("beta", "sigma"), probs =c(0.05, 0.5, 0.95)) # rhat = 1 for each variable, chain converged
+
+post3 <- as.data.frame(fit_3)
+cor(cbind(post3$`beta[1]`,post3$`beta[2]`, post3$`beta[3]`, post3$`beta[4]`))
+stan_plot(fit_3, pars = c("beta"))
+```
+
+Each of the variables included in the model are significant, with analysis of coefficients is similar to previous. The β4 coefficient indicates for each °F increase in max daily temperature, the ozone levels increase by 15.13 parts per billion.
+
+```{r Plot third model}
+f_mu2_solar <- function(x) post3$`beta[1]` + post3$`beta[2]` * x +
+  post3$`beta[3]` * mean(data$wind) + post3$`beta[4]` * mean(data$temp)
+mu2_solar <- sapply(solar_new,f_mu2_solar)
+# calculate 90% credible interval for regression mean
+y_hdi_solar = HDInterval::hdi(mu2_solar, credMass=0.9)
+hpdi_l_solar = y_hdi_solar[1,]
+hpdi_u_solar = y_hdi_solar[2,]
+
+# store plot of regression line as well as 90% credible interval for regression mean
+p2 <- p +
+  geom_point(data = as.data.frame(dat3),
+             aes(dat3$X[,2], dat3$ozone), shape = 1, color = 'dodgerblue') +
+  geom_ribbon(aes(solar_new, ymin = hpdi_l_solar, ymax = hpdi_u_solar),
+              alpha = .1) +
+  geom_abline(data = post3,
+              aes(intercept = mean(`beta[1]`), slope = mean(`beta[2]`))) +
+  labs(subtitle="HPDI Interval = 0.9")+  xlab("solar") + ylab("Ozone")
+
+y_pi_solar <- sapply( solar_new,
+                      function(x) rnorm(NROW(post3), post3$`beta[1]` + post3$`beta[2]` * x + post3$`beta[3]`*mean(data$wind) + post3$`beta[4]`*mean(data$temp), post3$sigma)
+)
+
+# calculate 90% credible intervals for prediction intervals
+y_phdi_solar = HDInterval::hdi(y_pi_solar, credMass=0.9)
+pi_l_solar = y_phdi_solar[1,]
+pi_u_solar = y_phdi_solar[2,]
+
+# plot prediction intervals along with regression line & credible interval for linear mean
+p2_solar <- p2 + geom_ribbon(mapping = aes(solar_new, ymin=pi_l_solar, ymax=pi_u_solar), alpha = 0.05) +
+  labs(subtitle = 'Prediction Intervals = 0.9')
+
+f_mu2_wind <- function(x) post3$`beta[1]` + post3$`beta[2]`*mean(data$solar) + post3$`beta[3]` * x + post3$`beta[4]` * mean(data$temp)
+mu2_wind <- sapply(wind_new,f_mu2_wind)
+# calculate 90% credible interval for regression mean
+y_hdi_wind = HDInterval::hdi(mu2_wind, credMass=0.9)
+hpdi_l_wind = y_hdi_wind[1,]
+hpdi_u_wind = y_hdi_wind[2,]
+
+y_pi_wind <- sapply( wind_new,
+                     function(x) rnorm(NROW(post3), post3$`beta[1]` + post3$`beta[2]`*mean(data$wind) +
+                                         post3$`beta[3]` * x + post3$`beta[4]`*mean(data$temp), post3$sigma)
+)
+
+# calculate 90% credible intervals for prediction intervals
+y_phdi_wind = HDInterval::hdi(y_pi_wind, credMass=0.9)
+pi_l_wind = y_phdi_wind[1,]
+pi_u_wind = y_phdi_wind[2,]
+
+# store plot of regression line as well as 90% credible interval for regression mean
+p2 <- p +
+  geom_point(data = as.data.frame(dat3),
+             aes(dat3$X[,3], dat3$ozone), shape = 1, color = 'dodgerblue') +
+  geom_ribbon(aes(wind_new, ymin = hpdi_l_wind, ymax = hpdi_u_wind),
+              alpha = .1) +
+  geom_abline(data = post3,
+              aes(intercept = mean(`beta[1]`), slope = mean(`beta[3]`))) +
+  labs(subtitle="HPDI Interval = 0.9") + xlab("wind") + ylab("Ozone")
+
+# plot prediction intervals along with regression line & credible interval for linear mean
+p2_wind <- p2 + geom_ribbon(mapping = aes(wind_new, ymin=pi_l_wind, ymax=pi_u_wind), alpha = 0.05) +
+  labs(subtitle = 'Prediction Intervals = 0.9')
+
+f_mu2_temp <- function(x) post3$`beta[1]` + post3$`beta[2]`*mean(data$solar) + post3$`beta[3]` * mean(data$wind)+ post3$`beta[4]`*x 
+temp_new <- seq(-2.4, 2.2, 0.01)
+mu2_temp <- sapply(temp_new,f_mu2_temp)
+# calculate 90% credible interval for regression mean
+y_hdi_temp = HDInterval::hdi(mu2_temp, credMass=0.9)
+hpdi_l_temp = y_hdi_temp[1,]
+hpdi_u_temp = y_hdi_temp[2,]
+
+y_pi_temp <- sapply( temp_new,
+                     function(x) rnorm(NROW(post3), post3$`beta[1]` + post3$`beta[2]`*mean(data$wind) + post3$`beta[3]` *mean(data$wind)+post3$`beta[4]`*x, post3$sigma)
+)
+
+# calculate 90% credible intervals for prediction intervals
+y_phdi_temp = HDInterval::hdi(y_pi_temp, credMass=0.9)
+pi_l_temp = y_phdi_temp[1,]
+pi_u_temp = y_phdi_temp[2,]
+
+# store plot of regression line as well as 90% credible interval for regression mean
+p2 <- p +
+  geom_point(data = as.data.frame(dat3),
+             aes(dat3$X[,4], dat3$ozone), shape = 1, color = 'dodgerblue') +
+  geom_ribbon(aes(temp_new, ymin = hpdi_l_temp, ymax = hpdi_u_temp),
+              alpha = .1) +
+  geom_abline(data = post3,
+              aes(intercept = mean(`beta[1]`), slope = mean(`beta[4]`))) +
+  labs(subtitle="HPDI Interval = 0.9") + xlab("temperature") + ylab("Ozone")
+
+# plot prediction intervals along with regression line & credible interval for linear mean
+p2_temp <- p2 + geom_ribbon(mapping = aes(temp_new, ymin=pi_l_temp, ymax=pi_u_temp), alpha = 0.05) +
+  labs(subtitle = 'Prediction Intervals = 0.9')
+
+p2_solar
+p2_wind
+p2_temp
+```
+
+Using the same methodology outlined in our analysis of model 2, I have produced plots of the ozone level versus each of the predictor variables in the model. From these plots we see that generally our linear models seem to be a fit the data decently well for each of our three variables.
+
+## Question 2
+
+Use techniques from Bayesian model choice to compare the three models.
+Comment on your analysis.
+
+```{r Examine WAIC & PSIS of each model}
+log_lik1 <- extract_log_lik(fit_1)
+waic1 <- waic(log_lik1)
+waic1
+loo1 <-loo(fit_1, pars="log_lik", cores = 2) # provides same output as above
+loo1 # pareto k estimates are good meaning indicating estimates are reliable
+
+log_lik2 <- extract_log_lik(fit_2)
+waic2 <- waic(log_lik2)
+waic2
+loo2 <- loo(fit_2, pars="log_lik", cores = 2)
+loo2 # pareto k estimates are good indicating estimates are reliable
+
+log_lik3 <- extract_log_lik(fit_3)
+waic3 <- waic(log_lik3)
+waic3
+loo3 <- loo(fit_3, pars="log_lik", cores = 2)
+loo3 # pareto k estimates are ok indicating estimates are reliable
+
+loo_compare(waic1, waic2, waic3)
+loo_compare(loo1, loo2, loo3)
+```
+
+When we initially try to calculate widely applicable information criteria (WAIC) for each of our models, we initially get a warning stating that our “p_waic estimates are greater than 0.4” meaning that the WAIC estimates for the models may be unstable.
+We are then advised to instead use Pareto-smoothed importance sampling (PSIS) to estimate the out-of-sample accuracy of our models as these estimates are more stable than the WAIC estimates.
+These estimates are deemed to be okay as the Pareto k estimates are sufficiently low for each observation, meaning we are okay to proceed with our analysis.
+Comparing each of the models using PSIS, we observe that M3 is the best model in terms of estimated out-of-sample accuracy, with $M_3$ performing significantly better than either of the other models. Similar results are observed when comparing the WAIC for each model.
+We therefore conclude that $M_3$ is the preferred model of the three.
+
+## Question 3
+
+Following from Q2, carry out posterior predictive checks to assess the model fit for each of $M_1$, $M_2$, $M_3$.
+Comments on your findings.
+--------------
+
+```{r Hierarchical Model stan code, echo=FALSE}
+y_rep1 <- as.matrix(fit_1, pars=c("y_rep"))
+y_rep2 <- as.matrix(fit_2, pars=c("y_rep"))
+y_rep3 <- as.matrix(fit_3, pars=c("y_rep"))
+
+# Take random sample of 50 posterior distributions & compare to observed data for each model
+ppc_dens_overlay(data$Y, y_rep1[sample(1:length(y_rep1[1,]), size = 50),])+theme_classic()
+ppc_dens_overlay(data$Y, y_rep2[sample(1:length(y_rep2[1,]), size = 50),])+theme_classic()
+ppc_dens_overlay(data$Y, y_rep3[sample(1:length(y_rep3[1,]), size = 50),])+theme_classic()
+
+```
+
+Comparing the observed distribution of ozone levels to a random sample of the simulated posterior predictive distributions, we see that none of the model seems to accurately model the actual ozone levels particularly well. One systemic issue to all 3 models is the fact that they tend to be unimodal, whereas the distribution of observed ozone levels has a slight bump to the left of the mode. Another issue is that the simulated distributions all overestimate the modal point, while also containing a large density of observations within the negative values which is not present in the observed ozone levels.
+
+## Question 4
+
+Are you satisfied with the three models under consideration?
+If not, explain why and consider an alternative model to address this concern and investigate if this model addresses your concerns.
+
+I am not satisfied with the three models under consideration, as none of the proposed models truly captures the distribution of observed ozone levels particularly accurately. The distribution of observed values does not appear to be normally distributed, with perhaps a lognormal distribution being a better fit for the data. A lognormal distribution for the data also makes sense when modelling ozone levels as ozone levels cannot be negative, & the lognormal distribution takes values on the set (0, ∞), whereas the previous models all predicted a significant number of observations with negative ozone levels.
+As an alternative to these models, I would instead propose two new potential models:
+
+$M_4 : log(ozone_i) \sim N(\beta 1 + \beta_2 \cdot solar_i +\beta_3 \cdot wind_i +\beta_4 \cdot temp_i, \sigma^2)$
+$M_5 : log(ozone_i) \sim N(\beta 1 + \beta_2 \cdot solar_i +\beta_3 \cdot wind_i +\beta_4 \cdot temp_i + \beta_5 \cdot solar_i^2, \sigma^2)$
+
+Each proposed model uses the same predictor variables to calculate the parameter \mu: solar radiation, wind speed & maximum daily temperatures, but instead of assuming ozone levels are normally distributed with mean \mu, they assume the ozone levels are lognormally-distributed. In addition to this, M5 includes a squared solar term, to account for some of the non-linearity observed in the relationship between solar radiation & ozone levels.
+I have not altered the priors for each parameter in these models as we still lack information on what would be a reasonable distribution for the parameters, and thus want to ensure the model remains flexible & let the data inform the model.
+
+
+We write the following stan code to implement each of the models outlined above.
+
+```{r Write stan file for proposed models, M4 & M5}
+dat4 <- list(N = NROW(data), K = 4, X = cbind(rep(1,N), data$solar, data$wind, data$temp), ozone = data$Y)
+# Use lognormal model for ozone rather than normal
+writeLines(readLines("Ozone2.stan"))
+```
+
+Fitting our proposed model $M_4$ & examining the parameter estimates:
+
+```{r Fit M4 & examine parameters}
+fit_4 <- stan(file="Ozone2.stan", data=dat4, iter=10000)
+print(fit_4, pars=c("beta", "sigma"), probs = c(0.05, 0.5, 0.95)) # rhat = 1 for each variable, chain converged
+
+post4 <- as.data.frame(fit_4)
+cor(cbind(post4$`beta[1]`,post4$`beta[2]`, post4$`beta[3]`, post4$`beta[4]`, post4$`beta[5]`))
+stan_plot(fit_4, pars = c("beta"))
+```
+
+Fitting our proposed model $M_5$ & examining the parameter estimates:
+
+```{r Fit M5 & examine parameters}
+# include squared solar parameter within model, as linear fit does not fit data well
+dat5 <- list(N = NROW(data), K = 5, X = cbind(rep(1,N), data$solar, data$wind, data$temp, data$solar^2), ozone = data$Y)
+fit_5 <- stan(file="Ozone2.stan", data=dat5, iter=10000)
+print(fit_5, pars=c("beta", "sigma"), probs = c(0.05, 0.5, 0.95)) # rhat = 1 for each variable, chain converged
+
+post5 <- as.data.frame(fit_5)
+cor(cbind(post5$`beta[1]`,post5$`beta[2]`, post5$`beta[3]`, post5$`beta[4]`, post5$`beta[5]`))
+stan_plot(fit_5, pars = c("beta"))
+```
+
+Comparing the observed distribution of mean ozone levels to a random sample of the distributions predicted by each of the proposed models yields the following graphs:
+
+```{r Create posterior density plot for M4}
+y_rep4 <- as.matrix(fit_4, pars=c("y_rep"))
+ppc_dens_overlay(data$Y, y_rep4[sample(1:length(y_rep4[1,]), size = 50),])+theme_classic()
+# Fit seems much better than previous models
+```
+
+```{r Create posterior density plot for M5}
+y_rep5 <- as.matrix(fit_5, pars=c("y_rep"))
+ppc_dens_overlay(data$Y, y_rep5[sample(1:length(y_rep5[1,]), size = 50),])+theme_classic()
+```
+
+Finally, we examine the performance of each of the proposed models in terms of WAIC & PSIS.
+
+```{r Examining the WAIC & LOO outputs}
+log_lik4 <- extract_log_lik(fit_4)
+waic4 <- waic(log_lik4)
+loo4 <- loo(fit_4, pars="log_lik", cores = 2)
+loo4
+
+log_lik5 <- extract_log_lik(fit_5)
+waic5 <- waic(log_lik5)
+loo5 <- loo(fit_5, pars="log_lik", cores = 2)
+loo5
+
+loo_compare(waic1, waic2, waic3, waic4, waic5)
+loo_compare(loo1, loo2, loo3, loo4, loo5)
+```
+
+We observe that M5 obtained the greatest log-pointwise predictive density amongst the models under consideration, and we see that the two new proposed models achieve lppd’s much higher than the initial three models, indicating that the lognormality assumption is a much better fit for the data.
+We also note that the difference in lppd between $M_4$ & $M_5$ is negligible when taking into consideration the standard error of the lppd estimates.
+This implies that there is no significant difference in the out-of-sample predictive accuracy of the models.
+
+Overall, there is not much difference between the two models, though both perform significantly better than the initial three models, neither satisfactorily captures the second modal point observed in the data.
+As $M_4$ achieves an indistinguishably similar level of accuracy using fewer parameters within the model which should lead to less uncertainty in our parameter estimates (this is important as the dataset only contains a relatively small number of observations) as well as making the model less likely to suffer from overfitting, we conclude that this model is optimal among the candidates for modelling the data.

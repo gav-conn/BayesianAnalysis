@@ -1,0 +1,243 @@
+---
+title: "BayesAnalysisAssignment4"
+author: "Gavin Connolly"
+date: "25/04/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+setwd("C:/Users/Gavin/Documents/Bayesian Analysis")
+
+library(tidyr) 
+library(rstan) 
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+library(ggplot2)
+library(bayesplot)
+theme_set(bayesplot::theme_default(base_family = "sans"))
+library(shinystan)
+source('stan_utility.R')
+library(GGally)
+library(gridExtra)
+library(loo)
+library("rethinking")
+```
+
+## Importation of Data
+
+Import data relating to the ratings of various cafés.
+Create a plot of the data to get basic idea as to their distribution.
+```{r Importation of Data}
+SEED <- 151515 # set random seed for reproducability
+
+data <- read.csv("coffee.csv", header = TRUE)
+
+# Initial analysis of data
+str(data)
+plot(data[,2], data[,1], xlab = "Cafe", ylab = 'Rating')
+```
+
+## Plot Density of Distributions
+
+From the above plot of the distribution of ratings amongst the 5 different cafés, we see that the ratings appear to be different for each of the 5 cafés, with Café 3 in particular standing out as having much more of its density concentrated within the upper end of the scale. 
+The variance of observed ratings also seems to vary between cafés, with cafés 1, 2 & 3 having flatter distributions than either café 4 or 5.
+In addition to this, there seems to be an element of bimodality in the distributions of the first 2 cafés which is not seen within the others. 
+It is of note however that the number of observations for each café is relatively low, ranging from 9 observations for café 2 to 18 observations for café 1, so we should not infer too much from these distributions.
+
+```{r Plot Densities}
+# Plot the density of ratings for each of the cafes
+plot <- matrix(data = NA, nrow = nrow(data), ncol = 2)
+plot$ratings <- data$ratings
+plot$cafe <- as.character(data$cafe)
+
+ggplot(as.data.frame(plot), aes(ratings, fill = cafe, colour = cafe)) +
+  geom_density(alpha = 0.2) + theme_grey()+
+  labs(x = 'rating', y = '', title = 'Distribution of ratings for each cafe') +
+  scale_y_continuous(breaks = NULL) + xlim(0, 100)
+```
+
+Store the ratings for each café individually so we can create individual models for each café.
+
+```{r Store Ratings Seperately}
+# store the ratings associated with each cafe individually
+ratings1 = data$ratings[which(data[,2]==1)]
+ratings2 = data$ratings[which(data[,2]==2)]
+ratings3 = data$ratings[which(data[,2]==3)]
+ratings4 = data$ratings[which(data[,2]==4)]
+ratings5 = data$ratings[which(data[,2]==5)]
+```
+
+## Seperate Model
+
+The first model we assessed was the model which treats each of the ratings distributions as being entirely unrelated to one another. 
+This model assumes that the distribution of ratings for one café is completely uninformative as to the distributions of the other cafés.
+
+#### Stan code for seperate models
+
+```{r Stan model for seperate cafés, echo=FALSE}
+writeLines(readLines("coffee.stan"))
+```
+
+```{r Create individual models for each café}
+
+cafe1 <- list(rating = ratings1, N = length(which(data[,2]==1)), cafe = data$cafe[which(data[,2]==1)])
+fit_cafe1 <- stan("coffee.stan",  data=cafe1, iter=20000, refresh = 0)
+
+#print(fit_cafe1, probs = c(0.10, 0.5, 0.9))
+
+cafe_sep_1 <- as.data.frame(fit_cafe1, pars=c("mu"))
+p1 <- stack(as.data.frame(cafe_sep_1))
+p1$ind = "cafe1"
+
+cafe2 <- list(rating = ratings2, N = length(which(data[,2]==2)), cafe = data$cafe[which(data[,2]==2)])
+fit_cafe2 <- stan("coffee.stan",  data=cafe2, iter=20000, refresh = 0)
+
+#print(fit_cafe2, probs = c(0.10, 0.5, 0.9))
+
+cafe_sep_2 <- as.data.frame(fit_cafe2, pars=c("mu"))
+p2 <- stack(as.data.frame(cafe_sep_2))
+p2$ind = "cafe2"
+
+cafe3 <- list(rating = ratings3, N = length(which(data[,2]==3)), cafe = data$cafe[which(data[,2]==3)])
+fit_cafe3 <- stan("coffee.stan",  data=cafe3, iter=20000, refresh = 0)
+
+#print(fit_cafe3, probs = c(0.10, 0.5, 0.9))
+
+cafe_sep_3 <- as.data.frame(fit_cafe3, pars=c("mu"))
+p3 <- stack(as.data.frame(cafe_sep_3))
+p3$ind = "cafe3"
+
+cafe4 <- list(rating = ratings4, N = length(which(data[,2]==4)), cafe = data$cafe[which(data[,2]==4)])
+fit_cafe4 <- stan("coffee.stan",  data=cafe4, iter=20000, refresh = 0)
+
+#print(fit_cafe4, probs = c(0.10, 0.5, 0.9))
+
+cafe_sep_4 <- as.data.frame(fit_cafe4, pars=c("mu"))
+p4 <- stack(as.data.frame(cafe_sep_4))
+p4$ind = "cafe4"
+
+cafe5 <- list(rating = ratings5, N = length(which(data[,2]==5)), cafe = data$cafe[which(data[,2]==5)])
+fit_cafe5 <- stan("coffee.stan",  data=cafe5, iter=20000, refresh = 0)
+
+#print(fit_cafe5, probs = c(0.10, 0.5, 0.9))
+
+cafe_sep_5 <- as.data.frame(fit_cafe5, pars=c("mu"))
+p5 <- stack(as.data.frame(cafe_sep_5))
+p5$ind = "cafe5"
+```
+
+The distributions for each café seem to be quite distinct from one another, with both the centres & variances of each of the posterior mean distributions clearly differing between distributions. This would indicate that the ratings for each café do not come from the same underlying distribution.
+
+```{r Plot posterior distributions of each of the individual coffee shops}
+posterior_sep <- rbind(p1,p2, p3, p4, p5)
+ggplot(posterior_sep, aes(values, fill = ind, colour = ind)) +
+  geom_density(alpha = 0.2) + theme_grey()+
+  labs(x = 'rating', y = '', title = 'Seperate model - Distributions of posterior means') +
+  scale_y_continuous(breaks = NULL) + xlim(0, 100)
+```
+
+We see from these plots that the replicated values tend to have their density mostly concentrated around the same areas as the observed values, but they do not line up very closely in terms of the shape of the distribution. This is likely due to the relatively low sample sizes involved in the dataset, leading to replicated distributions which vary a lot from sample to sample.
+
+Overall, I feel that the separate model is quite a good fit for the data, as each café seems to have a relatively distinct distribution, and the replicated samples line up quite well with the observed values when considering how small the sample sizes involved are.
+
+```{r density overlay plots}
+y_rep1 <- as.matrix(fit_cafe1, pars=c("y_rep"))
+ppc_dens_overlay(data[which(data[,2]==1),1], y_rep1[1:40,])+theme_classic()
+y_rep2 <- as.matrix(fit_cafe2, pars=c("y_rep"))
+ppc_dens_overlay(data[which(data[,2]==2),1], y_rep2[1:40,])+theme_classic()
+y_rep3 <- as.matrix(fit_cafe3, pars=c("y_rep"))
+ppc_dens_overlay(data[which(data[,2]==3),1], y_rep3[1:40,])+theme_classic()
+y_rep4 <- as.matrix(fit_cafe4, pars=c("y_rep"))
+ppc_dens_overlay(data[which(data[,2]==4),1], y_rep4[1:40,])+theme_classic()
+y_rep5 <- as.matrix(fit_cafe5, pars=c("y_rep"))
+ppc_dens_overlay(data[which(data[,2]==5),1], y_rep5[1:40,])+theme_classic()
+```
+
+## Pooled Model
+
+The second model under consideration assumes that each of the ratings is derived from the same underlying distribution & that there is no difference in the distributions between each of the cafés.
+
+As this model assumes a single distribution for each café, we see a much more concentrated distribution for our estimates in this case. The distribution is roughly centred on the overall average rating of 53.55, with the estimated standard deviation being roughly equal to that of the data (19.37).
+
+
+```{r Pooled model}
+cafe_pooled <- list(rating = data$ratings, N = nrow(data), cafe = data$cafe)
+fit_pooled <-stan("coffee.stan",  data=cafe_pooled, iter=5000, refresh = 0)
+
+#print(fit_pooled, probs = c(0.10, 0.5, 0.9))
+
+pooled <- as.data.frame(fit_pooled, pars=c("mu"))
+p6 <- stack(as.data.frame(pooled))
+
+ggplot(p6, aes(values, fill = ind, colour = ind)) +
+  geom_density(alpha = 0.2) + theme_grey()+
+  labs(x = 'rating', y = '', title = 'Pooled Model - Distributions of posterior means') +
+  scale_y_continuous(breaks = NULL) + xlim(0, 100)
+```
+
+A plot of the density of our replicated ratings values once again shows that the simulated values share their density within the same area as the observed data with the distribution generally being closer in shape to the observed values than was seen in the separate models, likely due to the larger sample size of the replications. We do note however that the simulated values do not seem to share the bimodality seen in the observed values.
+The pooled model does not seem a bad fit for the data overall, though as it assumes the same distribution for each of the cafés, something which would probably go against our intuition that different cafés would likely have a varying standards of service/quality, I would have concerns at how well this model would perform when predicting the ratings for individual cafés.
+
+```{r Posterior Density Plot of pooled model}
+y_rep_pooled <- as.matrix(fit_pooled, pars=c("y_rep"))
+ppc_dens_overlay(data[,1], y_rep_pooled[1:40,])+theme_classic()
+```
+
+The final model under consideration is a hierarchical model, which allows the mean rating to vary between the cafés, while also assuming that the means are drawn from a population distribution with the same hyperparameters for each café. This means that the distribution of ratings for each café will inform us to some extent about the distribution of ratings of the other cafés, while also allowing the strength of this relation to be updated based on the results of our MCMC sampling. In our case, the magnitude of the $\tau$ parameter will inform us as to the strength of this relation, with high values indicating that there is a high level of commonality in the distributions of the ratings of each café, and low values indicating that the distributions for each café are quite distinct from one another.
+
+#### Stan code for hierarchical model
+
+```{r Hierarchical Model stan code, echo=FALSE}
+writeLines(readLines("cafe_hierarchical.stan"))
+```
+
+It is apparent from our graph that the distributions of our posterior estimates for each café under the hierarchical model are very similar to those observed under our separate models. Indeed, observing the estimate of our $\tau$ hyperparameter (0.80) we see that it is quite close to 0, which would indicate that the distributions for each café are completely independent from one another.
+
+```{r Plot of posterior distributions}
+cafe_hier <- list(ratings1 = ratings1, ratings2 = ratings2, ratings3 = ratings3, ratings4 = ratings4, ratings5 = ratings5, 
+                  N1 = length(ratings1), N2 = length(ratings2), N3 = length(ratings3), N4 = length(ratings4), N5 = length(ratings5), cafe = data$cafe)
+
+fit_hier <-stan("cafe_hierarchical.stan",  data=cafe_hier, iter=20000, refresh = 0)
+
+#print(fit_hier, probs = c(0.10, 0.5, 0.9))
+
+post_hier <- as.data.frame(fit_hier, pars=c("mu"))
+posterior_hier <- stack(as.data.frame(post_hier))
+
+ggplot(posterior_hier, aes(values, fill = ind, colour = ind)) +
+  geom_density(alpha = 0.2) + theme_grey()+
+  labs(x = 'rating', y = '', title = 'Hierarchical model - Distributions of posterior means') +
+  scale_y_continuous(breaks = NULL) + xlim(0, 100)
+```
+
+Similarly to the separate model, we once again see that the replicated values do not line up particularly well with the observed values in terms of the shape of their distribution, likely for the same reasons as before, namely the low sample size for each café. Overall though, the replicated values seem to have density in the same areas as the observed values.
+
+We see from a comparison between the posterior mean estimates that the hierarchical model has the effect of bringing the posterior mean estimates for each café closer to the overall mean of 53.55. This should regularise for differences in the distributions of ratings due to error due to the particular sample of customers involved in rating each particular café & error in our estimates due the low sample size.
+
+```{r examine the effect using a hierarchical model has on posterior distributions}
+mean(data$ratings)
+var(data$ratings)/nrow(data)
+
+c(mean(ratings1), mean(ratings2), mean(ratings3), mean(ratings4), mean(ratings5))
+c(var(ratings1)/length(ratings1), var(ratings2)/length(ratings2), var(ratings3)/length(ratings3), var(ratings4)/length(ratings4), var(ratings5)/length(ratings5))
+
+post_sep <- cbind(cafe_sep_1, cafe_sep_2, cafe_sep_3, cafe_sep_4, cafe_sep_5)
+colnames(post_sep) <- c("mu1", "mu2", "mu3", "mu4", "mu5")
+# examine posterior means for the average rating for each cafe under each model
+colMeans(post_sep)
+mean(pooled$mu)
+colMeans(post_hier)
+# compare these figures to the overall mean
+abs(colMeans(post_sep)-mean(data$ratings))
+abs(mean(pooled$mu)-mean(data$ratings))
+abs(colMeans(post_hier)-mean(data$ratings))
+# examine the variance of estimates under each model
+apply(post_sep, 2, var)
+var(pooled$mu)
+apply(post_hier, 2, var)
+```
+
+## Conclusion
+To conclude, I feel that the hierarchical model is the best fit for modelling the ratings of the cafés as the model seems to fit relatively well with the data, even despite the low number of observations, and because intuitively, it makes sense to assume that the rating habits of customers will share some level of commonality across the various cafés, even if the strength of this commonality has not proved to be particularly great in our case.
+I feel like the hierarchical model should lend itself better than either the separate or pooled models in terms of its potential application in analysing the ratings distributions for cafés other than the 5 considered in the creation of our models, as it accounts for these common rating behaviours, while also acknowledging that these behaviours are unlikely to be exactly the same for every café. It is also less likely to suffer from the overfitting of a separate model, or the underfitting of a complete pooling model, instead striking a balance between the two approaches which should generally yield better results.
+It should be acknowledged however, that it is impossible to properly discern to which degree the observed differences in the distribution of ratings for the various cafés are due to random chance versus tangible differences in the underlying distribution. For this reason, we should remain open to reconsidering our conclusion if future data provides evidence in support of either potentiality.
